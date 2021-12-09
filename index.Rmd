@@ -46,92 +46,183 @@ class_diag <- function(score, truth, positive, cutoff=.5){
 
 # Mining, Classification, Prediction
 
-## Name and EID here
+Kyarah Rogers kr29575
 
 ### Introduction 
 
-Paragraph or two introducing your datasets and variables, why they are interesting to you, etc. See instructions for more information
+For this project, I chose to continue analyzing the police killings data set from my first project. I'm doing this in an attempt to get more information out of the provided data. This dataset consists of demographic information about victims of police killings with 467 total observations. Some victims were armed, others were not. A majority of these individuals were male, but some were female. Socioeconomic, education, and ethnicity data is also included. I am curious about the likelihood of falling victim to murder by police officers among different locations and/or groups of people. 
 
 ```{R}
 library(tidyverse)
-# read your datasets in here, e.g., with read_csv()
-
-# if your dataset needs tidying, do so here
-
-# any other code here
+policekill <- read_csv("https://raw.githubusercontent.com/fivethirtyeight/data/master/police-killings/police_killings.csv")
 ```
 
 ### Cluster Analysis
 
 ```{R}
 library(cluster)
-# clustering code here
+clust_police<-policekill%>%dplyr::select(county_fp,state_fp, tract_ce)
+pam<- clust_police %>% pam(k=2)
+pam
+pam_data<-policekill%>%select(county_fp,state_fp, tract_ce)
+sil_width<-vector()
+for(i in 2:10){  
+  pam_fit <- pam(pam_data, k = i)  
+  sil_width[i] <- pam_fit$silinfo$avg.width  
+}
+ggplot()+geom_line(aes(x=1:10,y=sil_width))+scale_x_continuous(name="k",breaks=1:10)
+pam$silinfo$avg.width
+plot(pam,which=2)
+
+final <-policekill %>% select(county_fp,state_fp, tract_ce) %>% scale %>% as.data.frame
+pam_data2 <- final %>% pam(2)
+final <- final %>% mutate(cluster=as.factor(pam_data2$clustering))
+library(GGally)
+ggpairs(final, aes(color=cluster))
 ```
 
-Discussion of clustering here
+For clustering, I used state and county FIPS (federal information processing standard publication) codes and tract ID. These variables are different ways of identifying U.S. counties. These numbers, while serving similar purpose, are not numerically related. Thus, it makes sense that there is very little correlation between them, as seen in the plots. 
     
     
 ### Dimensionality Reduction with PCA
 
 ```{R}
-# PCA code here
+police_nums <-  policekill %>% na.omit %>% select(county_income, urate, college) %>% scale 
+police_pca <-  princomp(police_nums)
+summary(police_pca, loadings=T)
+
+policedf<-data.frame(PC1=police_pca$scores[, 1],PC2=police_pca$scores[, 2])
+ggplot(policedf, aes(PC1, PC2)) + geom_point()
+
 ```
 
-Discussions of PCA here. 
+For PCA, I used the variables county income, college(share of 25+ pop with BA or higher), and unemployment rate. Principle components describe the extent to which certain variables contribute to the variance in the entire dataset. In my case, I kept my number of numeric varibales low, with just 3 selected. Of these, PC1 explains over half of the variance in the data at 56%. Components 2 and 3 explain 27% and 17% of the variance, respectively. Using PC1 and PC2, we capture over 80% of the variance combined. 
+
+A high score on component one suggests high county income and college-educated population percentages and low unemployment rates. This would make sense, if there are more college-educated people that exist in a county, the county income level is likely higher than in areas where the percentage of college graduates is lower. Similarly, counties with more college graduates are more likely to have a relatively high employment rate, and thus, a lower unemployment rate. Low scores on component 1 would suggest the opposite. A high score on component 2 strongly suggests higher county income values and higher unemployment rates-- interesting. There's also a slight negative correlation with a high score on component 2 with a low population of college graudates. This could describe wealthy counties that have education and wage gaps throughout the population. Finally, a high score on component 3 strongly suggests low values for college graduate population percentages and unemployment rates and lightly suggests higher county income values. This component may best describe counties with a lot of lower-paying jobs that don't require college degrees. 
 
 ###  Linear Classifier
 
 ```{R}
-# linear classifier code here
+policekill <- policekill %>% na.omit
+fit <- glm(gender=="Male" ~ latitude + longitude + state_fp + county_fp + h_income + county_income + comp_income + urate + college + pop, data=policekill, family="binomial")
+score <- predict(fit, type="response")
+score
+
+class_diag(score,truth=policekill$gender, positive="Male")
+
+#confusion matrix
+y<-policekill$gender
+y<- factor(y, levels=c("Male", "Female"))
+x<-policekill$county_income
+yhat <- ifelse(score>.5, "Male", "Female")
+yhat <- factor(yhat, levels=c("Male","Female"))
+table(actual = y, predicted = yhat)
 ```
 
 ```{R}
-# cross-validation of linear classifier here
+#Cross Validation
+set.seed(1234)
+k=10 
+data<-policekill[sample(nrow(policekill)),] 
+folds<-cut(1:nrow(policekill),breaks=k,labels=F) 
+
+diags<-NULL
+for(i in 1:k){
+  train<-data[folds!=i,] 
+  test<-data[folds==i,]
+  truth<-test$gender 
+  
+  fit <- glm(gender=="Male" ~ latitude + longitude + state_fp + county_fp + h_income + county_income + comp_income + urate + college + pop, data=train, family="binomial")
+ 
+  probs<-predict(fit,newdata = test,type="response")
+
+  diags<-rbind(diags,class_diag(probs,truth, positive="Male"))
+}
+summarize_all(diags, mean)
+
+
 ```
 
-Discussion here
+For simplicity, I first removed NAs from my dataset. Then, I used a linear classifier to predict gender from 10 of my numeric variables gave an AUC of 0.68, which is alright. Because a vast majority of the subjects are male, the predicted female count was 0, as seen in the confusion matrix. Upon performing cross validation, the AUC decreased to 0.58, a sign of my model over-fitting after being trained. 
 
 ### Non-Parametric Classifier
 
 ```{R}
 library(caret)
-# non-parametric classifier code here
+knn_fit <- knn3(factor(gender=="Male",levels=c("TRUE","FALSE")) ~ latitude + longitude + state_fp + county_fp + h_income + county_income + comp_income + urate + college + pop, data=policekill, k=5)
+y_hat_knn <- predict(knn_fit,newdata=policekill)
+class_diag(y_hat_knn[,1],policekill$gender, positive="Male")
+table(truth= factor(policekill$gender=="Male", levels=c("TRUE","FALSE")),
+      prediction= factor(y_hat_knn[,1]>.5, levels=c("TRUE","FALSE")))
+
 ```
 
 ```{R}
-# cross-validation of np classifier here
+set.seed(1234)
+k=10 
+data<-policekill[sample(nrow(policekill)),] 
+folds<-cut(1:nrow(policekill),breaks=k,labels=F) 
+diags<-NULL
+for(i in 1:k){
+  train<-data[folds!=i,] 
+  test<-data[folds==i,]
+  truth<-test$gender 
+
+   fit <- glm(gender=="Male" ~ latitude + longitude + state_fp + county_fp + h_income + county_income + comp_income + urate + college + pop, data=train, family="binomial")
+  
+  probs<-predict(fit,newdata = test,type="response")
+ 
+  diags<-rbind(diags,class_diag(probs,truth, positive="Male"))
+}
+summarize_all(diags,mean) 
 ```
 
-Discussion
+Using k-nearest neighbors on the data to predict gender from the same 10 numeric variables, AUC improved to 0.92. This time, our confusion matrix reveals predicted female cases, which is better than the linear model did. After cross validation, AUC drops quite a bit to 0.58, indicating that this model does a lot more over-fitting than the linear model. 
 
 
 ### Regression/Numeric Prediction
 
 ```{R}
-# regression model code here
+library(rpart); library(rpart.plot)
+fit<- rpart(pop~county_income+h_income, data=policekill)
+rpart.plot(fit)
+
+yhat<-predict(fit)
+mean((policekill$pop-yhat)^2)
+
 ```
 
 ```{R}
-# cross-validation of regression model here
+set.seed(1234)
+cv <- trainControl(method="cv", number = 5, classProbs = T, savePredictions = T)
+fit <- train(pop ~ county_income+h_income, data=policekill, trControl=cv, method="rpart")
+min(fit$results$RMSE)^2
 ```
 
-Discussion
+For this section of my project, I used a regression tree to predict population size based off of county and household income. The tree demonstrates splits based on household income first, then county income. Based on this model, larger populations tend to have greater average household and county income values. The MSE for the overall data is quite high at 4424424. This indicates that the predictors are not strong for determining population sizes overall. This is reasonable, as populations can be made up of large wealthy households, small poorer households, and often times, a combination of the two. Using a wealth vector to make a generalization about the demographic size of an area is not clear-cut. After performing cross-validation, MSE jumps even higher to 5199726! The increase once again demonstrates over-fitting of the model. Overfitting is easy to come across with this data, as the numeric values are so unique to specific locations. 
 
 ### Python 
 
 ```{R}
 library(reticulate)
+use_python("/usr/bin/python3", required = F)
+hi<-"second"
 ```
 
 ```{python}
-# python code here
+hi="chance"
+print(r.hi,hi)
+
+```
+```{R}
+cat(c(hi,py$hi))
 ```
 
-Discussion
+For this last bit, I have assigned the word "second" as an object called "hi" in R. Then, I have a python code in which I assigned the word "chance" to an object also called "hi". I'm then able to grab from both the R and python environments interactively using "r." and "py$". 
 
 ### Concluding Remarks
 
-Include concluding remarks here, if any
+This kind of data is not straightforward to interpret by any means, and I think this project did a beautiful job illustrating its complexity. I'm curious about how my models and conclusions may have differed if the data was more generalized or specific to individuals. For instance, income values were based on populations rather than the victims' households. I feel like more specific information could have revealed more trends and correlations.  
 
 
 
